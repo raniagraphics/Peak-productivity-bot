@@ -12,3 +12,7 @@ A Telegram bot for managing tasks, habits, and goals.
 
 ## Deployment
 Deployed on Render.com
+
+git add .
+git commit -m "Simplified version - removed OCR and voice"
+git push origin main
