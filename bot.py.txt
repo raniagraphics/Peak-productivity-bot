@@ -1,4 +1,3 @@
-
 import os
 import json
 import logging
@@ -8,7 +7,6 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     filters, ContextTypes, ConversationHandler
 )
-import pytesseract
 from PIL import Image
 import io
 import schedule
@@ -19,8 +17,6 @@ from reportlab.pdfgen import canvas
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet
-import speech_recognition as sr
-from pydub import AudioSegment
 
 # Database class
 class ProductivityDB:
@@ -61,45 +57,14 @@ class ProductivityDB:
 db = ProductivityDB()
 
 # Conversation states
-(GOALS_INPUT, HABITS_INPUT, TASK_CONFIRM, TASK_MODIFY, 
- TIME_ALLOCATION, CATEGORY_SELECT, RECURRING_SELECT, 
- TEAM_CREATE, TEAM_JOIN) = range(9)
+(GOALS_INPUT, HABITS_INPUT, TASK_INPUT, TASK_CONFIRM, 
+ CATEGORY_SELECT, RECURRING_SELECT, TIME_ALLOCATION) = range(7)
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
-
-# ==================== OCR & VOICE ====================
-
-def extract_text_from_image(image_bytes):
-    """Extract text from image using OCR"""
-    try:
-        image = Image.open(io.BytesIO(image_bytes))
-        text = pytesseract.image_to_string(image)
-        return text.strip()
-    except Exception as e:
-        logger.error(f"OCR Error: {e}")
-        return None
-
-def convert_voice_to_text(voice_file_path):
-    """Convert voice note to text using speech recognition"""
-    try:
-        # Convert OGG to WAV (Telegram uses OGG format)
-        audio = AudioSegment.from_ogg(voice_file_path)
-        wav_path = voice_file_path.replace('.ogg', '.wav')
-        audio.export(wav_path, format='wav')
-        
-        # Speech recognition
-        recognizer = sr.Recognizer()
-        with sr.AudioFile(wav_path) as source:
-            audio_data = recognizer.record(source)
-            text = recognizer.recognize_google(audio_data)
-        
-        # Cleanup
-        os.remove(wav_path)
-        return text
-    except Exception as e:
-        logger.error(f"Voice recognition error: {e}")
-        return None
 
 # ==================== SETUP & ONBOARDING ====================
 
@@ -111,8 +76,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎯 *Welcome to Your Ultimate Productivity Assistant!*\n\n"
         "I'll help you:\n"
         "✅ Manage daily tasks with categories\n"
-        "📸 Convert photos to tasks (OCR)\n"
-        "🎤 Convert voice notes to tasks\n"
         "🔁 Set recurring tasks\n"
         "⏰ Send smart reminders\n"
         "🍅 Pomodoro timer for focus\n"
@@ -171,26 +134,21 @@ async def receive_habits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db.save_user(user_id, user_data)
     
     keyboard = [
-        ['📋 Main Menu', '❓ Help']
+        ['📋 Add Tasks', '✅ Check Habits'],
+        ['🍅 Pomodoro', '📊 Status'],
+        ['❓ Help']
     ]
     
     await update.message.reply_text(
         f"🎯 *Perfect! Tracking {len(habits)} habits*\n\n"
         f"Setup complete! Here's what you can do:\n\n"
-        f"*Quick Start:*\n"
-        f"📸 /photo - Photo of to-do list\n"
-        f"🎤 /voice - Voice note tasks\n"
-        f"✏️ /manual - Type tasks\n\n"
-        f"*Daily Commands:*\n"
-        f"✅ /habits - Check habits\n"
-        f"🍅 /pomodoro - Start focus timer\n"
-        f"📊 /status - Today's progress\n\n"
-        f"*Management:*\n"
-        f"🔁 /recurring - Recurring tasks\n"
-        f"🏷️ /categories - Task categories\n"
+        f"*Commands:*\n"
+        f"✏️ /add - Add tasks manually\n"
+        f"✅ /habits - Check off habits\n"
+        f"🍅 /pomodoro - Focus timer\n"
+        f"📊 /status - Today's progress\n"
         f"🎯 /goals - Update goals\n"
-        f"👥 /team - Team features\n\n"
-        f"*Reports:*\n"
+        f"👥 /team - Team features\n"
         f"📈 /report - View reports\n"
         f"📄 /export - Export PDF",
         parse_mode='Markdown',
@@ -198,101 +156,44 @@ async def receive_habits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
-# ==================== PHOTO & VOICE TASKS ====================
-
-async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    
-    await update.message.reply_text("📸 Processing your image...")
-    
-    photo = await update.message.photo[-1].get_file()
-    photo_bytes = await photo.download_as_bytearray()
-    
-    text = extract_text_from_image(bytes(photo_bytes))
-    
-    if not text:
-        await update.message.reply_text("❌ Could not read text. Try /manual or /voice instead.")
-        return ConversationHandler.END
-    
-    tasks = [line.strip() for line in text.split('\n') if line.strip()]
-    context.user_data['pending_tasks'] = tasks
-    
-    task_list = "\n".join([f"{i+1}. {t}" for i, t in enumerate(tasks)])
-    
-    keyboard = [['✅ Confirm', '✏️ Modify', '❌ Cancel']]
-    
-    await update.message.reply_text(
-        f"📋 *Found {len(tasks)} tasks:*\n\n{task_list}\n",
-        parse_mode='Markdown',
-        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
-    )
-    return TASK_CONFIRM
-
-async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    
-    await update.message.reply_text("🎤 Processing your voice note...")
-    
-    voice = await update.message.voice.get_file()
-    voice_path = f"voice_{user_id}.ogg"
-    await voice.download_to_drive(voice_path)
-    
-    text = convert_voice_to_text(voice_path)
-    os.remove(voice_path)
-    
-    if not text:
-        await update.message.reply_text("❌ Could not understand audio. Try speaking clearly or use /manual.")
-        return ConversationHandler.END
-    
-    tasks = [t.strip() for t in text.split('.') if t.strip()]
-    context.user_data['pending_tasks'] = tasks
-    
-    task_list = "\n".join([f"{i+1}. {t}" for i, t in enumerate(tasks)])
-    
-    keyboard = [['✅ Confirm', '✏️ Modify', '❌ Cancel']]
-    
-    await update.message.reply_text(
-        f"🎤 *Heard:*\n\n{task_list}\n",
-        parse_mode='Markdown',
-        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
-    )
-    return TASK_CONFIRM
-
 # ==================== TASK MANAGEMENT ====================
 
-async def confirm_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    response = update.message.text.lower()
+async def add_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "✏️ *Enter your tasks* (one per line)\n\n"
+        "Example:\n"
+        "Buy groceries\n"
+        "Finish report\n"
+        "Call dentist",
+        parse_mode='Markdown'
+    )
+    return TASK_INPUT
+
+async def receive_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tasks_text = update.message.text
+    tasks = [t.strip() for t in tasks_text.split('\n') if t.strip()]
     
-    if '✅' in response or 'confirm' in response:
-        tasks = context.user_data.get('pending_tasks', [])
-        context.user_data['confirmed_tasks'] = tasks
-        context.user_data['current_task_index'] = 0
-        
-        # Show category selection
-        user_id = update.effective_user.id
-        user_data = db.get_user(user_id)
-        categories = user_data.get('categories', ['Work', 'Personal', 'Health'])
-        
-        keyboard = [[cat] for cat in categories] + [['Skip Categories']]
-        
-        await update.message.reply_text(
-            f"🏷️ *Task 1:* {tasks[0]}\n\nSelect category:",
-            parse_mode='Markdown',
-            reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
-        )
-        return CATEGORY_SELECT
+    context.user_data['pending_tasks'] = tasks
+    context.user_data['current_task_index'] = 0
+    context.user_data['task_data'] = []
     
-    elif '✏️' in response or 'modify' in response:
-        await update.message.reply_text("✏️ Send corrected task list (one per line):")
-        return TASK_MODIFY
+    user_id = update.effective_user.id
+    user_data = db.get_user(user_id)
+    categories = user_data.get('categories', ['Work', 'Personal', 'Health'])
     
-    else:
-        await update.message.reply_text("❌ Cancelled. Use /photo, /voice, or /manual to try again.")
-        return ConversationHandler.END
+    keyboard = [[cat] for cat in categories] + [['⏭️ Skip Categories']]
+    
+    await update.message.reply_text(
+        f"📋 *Got {len(tasks)} tasks!*\n\n"
+        f"🏷️ Task 1: {tasks[0]}\n\nSelect category:",
+        parse_mode='Markdown',
+        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+    )
+    return CATEGORY_SELECT
 
 async def select_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     category = update.message.text
-    tasks = context.user_data.get('confirmed_tasks', [])
+    tasks = context.user_data.get('pending_tasks', [])
     index = context.user_data.get('current_task_index', 0)
     
     if 'task_data' not in context.user_data:
@@ -300,12 +201,11 @@ async def select_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     context.user_data['task_data'].append({
         'task': tasks[index],
-        'category': category if category != 'Skip Categories' else 'General'
+        'category': category if '⏭️' not in category else 'General'
     })
     
-    # Ask about recurring
     keyboard = [
-        ['📅 Daily', '📆 Weekly', '🔄 Custom'],
+        ['📅 Daily', '📆 Weekly'],
         ['⏭️ One-time only']
     ]
     
@@ -318,7 +218,7 @@ async def select_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def select_recurring(update: Update, context: ContextTypes.DEFAULT_TYPE):
     recurring = update.message.text
-    tasks = context.user_data.get('confirmed_tasks', [])
+    tasks = context.user_data.get('pending_tasks', [])
     index = context.user_data.get('current_task_index', 0)
     
     task_data = context.user_data['task_data'][-1]
@@ -327,12 +227,9 @@ async def select_recurring(update: Update, context: ContextTypes.DEFAULT_TYPE):
         task_data['recurring'] = 'daily'
     elif '📆' in recurring:
         task_data['recurring'] = 'weekly'
-    elif '🔄' in recurring:
-        task_data['recurring'] = 'custom'
     else:
         task_data['recurring'] = None
     
-    # Now ask for time
     await update.message.reply_text(
         f"⏰ *Task:* {tasks[index]}\n\n"
         f"Enter time:\n"
@@ -345,7 +242,7 @@ async def select_recurring(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def allocate_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     time_input = update.message.text
-    tasks = context.user_data.get('confirmed_tasks', [])
+    tasks = context.user_data.get('pending_tasks', [])
     index = context.user_data.get('current_task_index', 0)
     
     task_data = context.user_data['task_data'][-1]
@@ -359,7 +256,7 @@ async def allocate_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if index < len(tasks):
         user_data = db.get_user(user_id)
         categories = user_data.get('categories', ['Work', 'Personal', 'Health'])
-        keyboard = [[cat] for cat in categories] + [['Skip Categories']]
+        keyboard = [[cat] for cat in categories] + [['⏭️ Skip Categories']]
         
         await update.message.reply_text(
             f"🏷️ *Task {index + 1}:* {tasks[index]}\n\nSelect category:",
@@ -368,7 +265,6 @@ async def allocate_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return CATEGORY_SELECT
     else:
-        # Save all tasks
         user_data = db.get_user(user_id)
         for task in context.user_data['task_data']:
             if task.get('recurring'):
@@ -376,11 +272,10 @@ async def allocate_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 user_data['tasks'].append(task)
         
-        db.save_user(user_id, user_data)
-        
-        # Award points
         points = len(tasks) * 5
         user_data['points'] += points
+        
+        db.save_user(user_id, user_data)
         
         summary = "\n".join([
             f"{i+1}. [{t['category']}] {t['task']} - {t['time']}" +
@@ -396,26 +291,6 @@ async def allocate_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
 
-async def modify_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    tasks_text = update.message.text
-    tasks = [t.strip() for t in tasks_text.split('\n') if t.strip()]
-    
-    context.user_data['confirmed_tasks'] = tasks
-    context.user_data['current_task_index'] = 0
-    
-    user_id = update.effective_user.id
-    user_data = db.get_user(user_id)
-    categories = user_data.get('categories', ['Work', 'Personal', 'Health'])
-    
-    keyboard = [[cat] for cat in categories] + [['Skip Categories']]
-    
-    await update.message.reply_text(
-        f"✅ *Updated!*\n\n🏷️ Task 1: {tasks[0]}\n\nSelect category:",
-        parse_mode='Markdown',
-        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
-    )
-    return CATEGORY_SELECT
-
 # ==================== POMODORO TIMER ====================
 
 async def pomodoro_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -426,8 +301,7 @@ async def pomodoro_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("🍅 Start Work (25min)", callback_data="pomo_work")],
         [InlineKeyboardButton("☕ Short Break (5min)", callback_data="pomo_break")],
-        [InlineKeyboardButton("🌙 Long Break (15min)", callback_data="pomo_long")],
-        [InlineKeyboardButton("⚙️ Settings", callback_data="pomo_settings")]
+        [InlineKeyboardButton("🌙 Long Break (15min)", callback_data="pomo_long")]
     ]
     
     count = user_data.get('pomodoro_count', 0)
@@ -452,7 +326,6 @@ async def pomodoro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         duration = settings['work']
         msg = f"🍅 *Work session started!*\n\nFocus for {duration} minutes.\nI'll notify you when it's done!"
         
-        # Schedule notification
         context.job_queue.run_once(
             pomodoro_complete,
             duration * 60,
@@ -485,9 +358,6 @@ async def pomodoro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data={'user_id': user_id, 'type': 'long_break'},
             name=f'pomo_{user_id}'
         )
-    
-    else:
-        msg = "⚙️ Pomodoro settings coming soon!"
     
     await query.edit_message_text(msg, parse_mode='Markdown')
 
@@ -556,11 +426,9 @@ async def habit_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if habit['streak'] > habit.get('best_streak', 0):
                     habit['best_streak'] = habit['streak']
                 
-                # Award points
-                points = 5 + (habit['streak'] // 7) * 5  # Bonus for weekly streaks
+                points = 5 + (habit['streak'] // 7) * 5
                 user_data['points'] += points
                 
-                # Check achievements
                 if habit['streak'] == 7:
                     user_data['achievements'].append(f"🏆 Week Warrior - {habit_name}")
                 elif habit['streak'] == 30:
@@ -576,159 +444,28 @@ async def habit_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(msg, parse_mode='Markdown')
                 break
 
-# ==================== TEAM FEATURES ====================
+# ==================== STATUS & REPORTS ====================
 
-async def team_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_data = db.get_user(user_id)
     
-    keyboard = [
-        [InlineKeyboardButton("➕ Create Team", callback_data="team_create")],
-        [InlineKeyboardButton("🔗 Join Team", callback_data="team_join")],
-        [InlineKeyboardButton("👥 My Team", callback_data="team_view")],
-        [InlineKeyboardButton("🏆 Leaderboard", callback_data="team_leaderboard")]
-    ]
-    
-    await update.message.reply_text(
-        "👥 *Team Accountability*\n\n"
-        "Share goals, compete on leaderboards,\nand hold each other accountable!",
-        parse_mode='Markdown',
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-async def team_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = query.from_user.id
-    
-    if query.data == "team_create":
-        team_id = f"team_{user_id}_{int(time.time())}"
-        user_data = db.get_user(user_id)
-        user_data['team_id'] = team_id
-        
-        team_data = {
-            'members': [user_id],
-            'created_by': user_id,
-            'shared_goals': []
-        }
-        db.save_team(team_id, team_data)
-        db.save_user(user_id, user_data)
-        
-        await query.edit_message_text(
-            f"✅ *Team Created!*\n\n"
-            f"Team ID: `{team_id}`\n\n"
-            f"Share this ID with teammates to invite them!",
-            parse_mode='Markdown'
-        )
-    
-    elif query.data == "team_leaderboard":
-        user_data = db.get_user(user_id)
-        team_id = user_data.get('team_id')
-        
-        if not team_id:
-            await query.edit_message_text("❌ You're not in a team yet!")
-            return
-        
-        team = db.get_team(team_id)
-        leaderboard = []
-        
-        for member_id in team['members']:
-            member_data = db.get_user(member_id)
-            leaderboard.append({
-                'id': member_id,
-                'points': member_data.get('points', 0)
-            })
-        
-        leaderboard.sort(key=lambda x: x['points'], reverse=True)
-        
-        board_text = "\n".join([
-            f"{i+1}. User {m['id']} - {m['points']} pts"
-            for i, m in enumerate(leaderboard[:10])
-        ])
-        
-        await query.edit_message_text(
-            f"🏆 *Team Leaderboard*\n\n{board_text}",
-            parse_mode='Markdown'
-        )
-
-# ==================== REPORTS & PDF EXPORT ====================
-
-async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        ['📅 Daily', '📆 Weekly'],
-        ['📊 Monthly', '📈 Annual'],
-        ['🏆 Achievements']
-    ]
-    
-    await update.message.reply_text(
-        "📊 *Select Report Type:*",
-        parse_mode='Markdown',
-        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
-    )
-
-async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    report_type = update.message.text
-    user_data = db.get_user(user_id)
-    
-    if '📅' in report_type or 'Daily' in report_type:
-        report = generate_daily_report(user_data)
-    elif '📆' in report_type or 'Weekly' in report_type:
-        report = generate_weekly_report(user_data)
-    elif '📊' in report_type or 'Monthly' in report_type:
-        report = generate_monthly_report(user_data)
-    elif '📈' in report_type or 'Annual' in report_type:
-        report = generate_annual_report(user_data)
-    else:
-        report = generate_achievements_report(user_data)
-    
-    await update.message.reply_text(report, parse_mode='Markdown')
-
-def generate_daily_report(user_data):
     tasks = user_data.get('tasks', [])
     completed = [t for t in tasks if t.get('completed')]
     habits = user_data.get('habits', [])
     today = datetime.now().date().isoformat()
     habits_done = sum(1 for h in habits if today in h.get('tracking', []))
     
-    return (
-        f"📅 *Daily Report - {datetime.now().strftime('%B %d, %Y')}*\n\n"
+    status_text = (
+        f"📊 *Today's Progress*\n\n"
         f"✅ Tasks: {len(completed)}/{len(tasks)}\n"
         f"🎯 Habits: {habits_done}/{len(habits)}\n"
         f"🍅 Pomodoros: {user_data.get('pomodoro_count', 0)}\n"
-        f"⭐ Points: {user_data.get('points', 0)}\n\n"
-        f"{'🎉 Great day!' if len(completed) == len(tasks) else '💪 Keep pushing!'}"
+        f"⭐ Total Points: {user_data.get('points', 0)}\n\n"
+        f"{'🎉 Great day!' if len(completed) == len(tasks) and habits_done == len(habits) else '💪 Keep going!'}"
     )
-
-def generate_weekly_report(user_data):
-    return "📆 *Weekly Report*\n\nComing soon with detailed analytics!"
-
-def generate_monthly_report(user_data):
-    goals = user_data.get('monthly_goals', [])
-    habits = user_data.get('habits', [])
     
-    goal_progress = "\n".join([f"• {g['goal']}: {g['progress']}%" for g in goals])
-    avg_streak = sum(h.get('streak', 0) for h in habits) / len(habits) if habits else 0
-    
-    return (
-        f"📊 *Monthly Report*\n\n"
-        f"*Goals Progress:*\n{goal_progress}\n\n"
-        f"*Habits:*\n"
-        f"Average streak: {avg_streak:.1f} days\n"
-        f"Total points: {user_data.get('points', 0)}"
-    )
-
-def generate_annual_report(user_data):
-    return "📈 *Annual Report*\n\nYour year in review - coming soon!"
-
-def generate_achievements_report(user_data):
-    achievements = user_data.get('achievements', [])
-    
-    if not achievements:
-        return "🏆 *Achievements*\n\nNo achievements yet. Keep going!"
-    
-    return "🏆 *Your Achievements*\n\n" + "\n".join(achievements)
+    await update.message.reply_text(status_text, parse_mode='Markdown')
 
 async def export_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -736,11 +473,9 @@ async def export_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text("📄 Generating PDF report...")
     
-    # Generate PDF
     pdf_path = f"report_{user_id}.pdf"
     create_pdf_report(user_data, pdf_path)
     
-    # Send PDF
     with open(pdf_path, 'rb') as pdf:
         await update.message.reply_document(
             document=pdf,
@@ -748,56 +483,50 @@ async def export_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caption="📊 Your productivity report"
         )
     
-    # Cleanup
     os.remove(pdf_path)
 
 def create_pdf_report(user_data, filename):
-    """Generate beautiful PDF report"""
     doc = SimpleDocTemplate(filename, pagesize=letter)
     styles = getSampleStyleSheet()
     story = []
     
-    # Title
     title = Paragraph(f"<b>Productivity Report - {datetime.now().strftime('%B %Y')}</b>", styles['Title'])
     story.append(title)
-    story.append(Paragraph("<br/><br/>", styles['Normal']))
     
-    # Goals section
-    story.append(Paragraph("<b>Monthly Goals</b>", styles['Heading2']))
     goals = user_data.get('monthly_goals', [])
-    goal_data = [['Goal', 'Progress']]
-    for g in goals:
-        goal_data.append([g['goal'], f"{g['progress']}%"])
+    if goals:
+        story.append(Paragraph("<br/><b>Monthly Goals</b>", styles['Heading2']))
+        goal_data = [['Goal', 'Progress']]
+        for g in goals:
+            goal_data.append([g['goal'], f"{g['progress']}%"])
+        
+        goal_table = Table(goal_data)
+        goal_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        ]))
+        story.append(goal_table)
     
-    goal_table = Table(goal_data)
-    goal_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black)
-    ]))
-    story.append(goal_table)
-    
-    # Habits section
-    story.append(Paragraph("<br/><b>Habit Streaks</b>", styles['Heading2']))
     habits = user_data.get('habits', [])
-    habit_data = [['Habit', 'Current Streak', 'Best Streak']]
-    for h in habits:
-        habit_data.append([h['habit'], str(h.get('streak', 0)), str(h.get('best_streak', 0))])
+    if habits:
+        story.append(Paragraph("<br/><b>Habit Streaks</b>", styles['Heading2']))
+        habit_data = [['Habit', 'Current Streak', 'Best Streak']]
+        for h in habits:
+            habit_data.append([h['habit'], str(h.get('streak', 0)), str(h.get('best_streak', 0))])
+        
+        habit_table = Table(habit_data)
+        habit_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        ]))
+        story.append(habit_table)
     
-    habit_table = Table(habit_data)
-    habit_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black)
-    ]))
-    story.append(habit_table)
-    
-    # Stats
     story.append(Paragraph(f"<br/><b>Statistics</b>", styles['Heading2']))
     story.append(Paragraph(f"Total Points: {user_data.get('points', 0)}", styles['Normal']))
     story.append(Paragraph(f"Pomodoros: {user_data.get('pomodoro_count', 0)}", styles['Normal']))
@@ -805,14 +534,39 @@ def create_pdf_report(user_data, filename):
     
     doc.build(story)
 
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_text = (
+        "📚 *Command Reference*\n\n"
+        "*Getting Started:*\n"
+        "/start - Setup goals & habits\n\n"
+        "*Daily Use:*\n"
+        "/add - Add new tasks\n"
+        "/habits - Check off habits\n"
+        "/pomodoro - Focus timer\n"
+        "/status - Today's progress\n\n"
+        "*Management:*\n"
+        "/goals - Update goals\n"
+        "/team - Team features\n\n"
+        "*Reports:*\n"
+        "/report - View reports\n"
+        "/export - Download PDF\n\n"
+        "💡 Tip: Use quick reply buttons for faster access!"
+    )
+    await update.message.reply_text(help_text, parse_mode='Markdown')
+
 # ==================== MAIN ====================
 
 def main():
-    BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', 'YOUR_BOT_TOKEN')
+    BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+    
+    if not BOT_TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN not found in environment variables!")
+        return
+    
+    logger.info("🚀 Starting bot...")
     
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # Setup conversation
     setup_conv = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
@@ -822,54 +576,29 @@ def main():
         fallbacks=[CommandHandler('start', start)]
     )
     
-    # Task input conversations
-    photo_conv = ConversationHandler(
-        entry_points=[
-            CommandHandler('photo', photo_handler),
-            MessageHandler(filters.PHOTO, photo_handler)
-        ],
+    task_conv = ConversationHandler(
+        entry_points=[CommandHandler('add', add_tasks)],
         states={
-            TASK_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_tasks)],
+            TASK_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_tasks)],
             CATEGORY_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_category)],
             RECURRING_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_recurring)],
             TIME_ALLOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, allocate_time)],
-            TASK_MODIFY: [MessageHandler(filters.TEXT & ~filters.COMMAND, modify_tasks)],
         },
-        fallbacks=[]
+        fallbacks=[CommandHandler('add', add_tasks)]
     )
     
-    voice_conv = ConversationHandler(
-        entry_points=[
-            CommandHandler('voice', voice_handler),
-            MessageHandler(filters.VOICE, voice_handler)
-        ],
-        states={
-            TASK_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_tasks)],
-            CATEGORY_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_category)],
-            RECURRING_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_recurring)],
-            TIME_ALLOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, allocate_time)],
-            TASK_MODIFY: [MessageHandler(filters.TEXT & ~filters.COMMAND, modify_tasks)],
-        },
-        fallbacks=[]
-    )
-    
-    # Handlers
     application.add_handler(setup_conv)
-    application.add_handler(photo_conv)
-    application.add_handler(voice_conv)
+    application.add_handler(task_conv)
     application.add_handler(CommandHandler('pomodoro', pomodoro_command))
     application.add_handler(CommandHandler('habits', habits_command))
-    application.add_handler(CommandHandler('team', team_command))
-    application.add_handler(CommandHandler('report', report_command))
+    application.add_handler(CommandHandler('status', status_command))
     application.add_handler(CommandHandler('export', export_pdf))
+    application.add_handler(CommandHandler('help', help_command))
     application.add_handler(CallbackQueryHandler(pomodoro_callback, pattern='^pomo_'))
-    application.add_handler(CallbackQueryHandler(team_callback, pattern='^team_'))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, habit_check))
     
-    # Start
+    logger.info("✅ Bot started successfully!")
     application.run_polling()
 
 if __name__ == '__main__':
     main()
-
-
