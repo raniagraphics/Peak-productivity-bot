@@ -1,6 +1,4 @@
-# import pytesseract
-# import speech_recognition as sr
-# from pydub import AudioSegment
+
 import os
 import json
 import logging
@@ -873,4 +871,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
