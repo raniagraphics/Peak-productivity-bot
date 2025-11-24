@@ -1,11 +1,10 @@
 services:
   - type: web
-    name: productivity-bot
+    name: Peak-productivity-bot
     env: python
-    buildCommand: |
-      apt-get update
-      apt-get install -y tesseract-ocr tesseract-ocr-eng ffmpeg portaudio19-dev
-      pip install -r requirements.txt
+    region: oregon
+    plan: free
+    buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
     envVars:
       - key: TELEGRAM_BOT_TOKEN
