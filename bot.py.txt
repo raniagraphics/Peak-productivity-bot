@@ -1,6 +1,872 @@
-.env
-__pycache__/
-*.pyc
-*.pdf
-voice_*.ogg
-voice_*.wav
+import os
+import json
+import logging
+from datetime import datetime, timedelta
+from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
+    filters, ContextTypes, ConversationHandler
+)
+import pytesseract
+from PIL import Image
+import io
+import schedule
+import threading
+import time
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+from reportlab.lib.styles import getSampleStyleSheet
+import speech_recognition as sr
+from pydub import AudioSegment
+
+# Database class
+class ProductivityDB:
+    def __init__(self):
+        self.users = {}
+        self.teams = {}
+    
+    def get_user(self, user_id):
+        if user_id not in self.users:
+            self.users[user_id] = {
+                'monthly_goals': [],
+                'habits': [],
+                'habit_streaks': {},
+                'tasks': [],
+                'recurring_tasks': [],
+                'completed_tasks': [],
+                'categories': ['Work', 'Personal', 'Health'],
+                'pomodoro_settings': {'work': 25, 'break': 5, 'long_break': 15},
+                'pomodoro_count': 0,
+                'weekly_reports': [],
+                'monthly_reports': [],
+                'annual_reports': [],
+                'team_id': None,
+                'points': 0,
+                'achievements': []
+            }
+        return self.users[user_id]
+    
+    def save_user(self, user_id, data):
+        self.users[user_id] = data
+    
+    def get_team(self, team_id):
+        return self.teams.get(team_id, {'members': [], 'shared_goals': []})
+    
+    def save_team(self, team_id, data):
+        self.teams[team_id] = data
+
+db = ProductivityDB()
+
+# Conversation states
+(GOALS_INPUT, HABITS_INPUT, TASK_CONFIRM, TASK_MODIFY, 
+ TIME_ALLOCATION, CATEGORY_SELECT, RECURRING_SELECT, 
+ TEAM_CREATE, TEAM_JOIN) = range(9)
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# ==================== OCR & VOICE ====================
+
+def extract_text_from_image(image_bytes):
+    """Extract text from image using OCR"""
+    try:
+        image = Image.open(io.BytesIO(image_bytes))
+        text = pytesseract.image_to_string(image)
+        return text.strip()
+    except Exception as e:
+        logger.error(f"OCR Error: {e}")
+        return None
+
+def convert_voice_to_text(voice_file_path):
+    """Convert voice note to text using speech recognition"""
+    try:
+        # Convert OGG to WAV (Telegram uses OGG format)
+        audio = AudioSegment.from_ogg(voice_file_path)
+        wav_path = voice_file_path.replace('.ogg', '.wav')
+        audio.export(wav_path, format='wav')
+        
+        # Speech recognition
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(wav_path) as source:
+            audio_data = recognizer.record(source)
+            text = recognizer.recognize_google(audio_data)
+        
+        # Cleanup
+        os.remove(wav_path)
+        return text
+    except Exception as e:
+        logger.error(f"Voice recognition error: {e}")
+        return None
+
+# ==================== SETUP & ONBOARDING ====================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_data = db.get_user(user_id)
+    
+    welcome_text = (
+        "🎯 *Welcome to Your Ultimate Productivity Assistant!*\n\n"
+        "I'll help you:\n"
+        "✅ Manage daily tasks with categories\n"
+        "📸 Convert photos to tasks (OCR)\n"
+        "🎤 Convert voice notes to tasks\n"
+        "🔁 Set recurring tasks\n"
+        "⏰ Send smart reminders\n"
+        "🍅 Pomodoro timer for focus\n"
+        "📊 Track goals & habits with streaks\n"
+        "🏆 Earn points & achievements\n"
+        "👥 Team accountability\n"
+        "📈 Generate beautiful PDF reports\n\n"
+        "Let's set up your account!\n\n"
+        "Enter your *3 MAJOR GOALS* for this month (one per line):"
+    )
+    
+    await update.message.reply_text(welcome_text, parse_mode='Markdown')
+    return GOALS_INPUT
+
+async def receive_goals(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    goals_text = update.message.text
+    goals = [g.strip() for g in goals_text.split('\n') if g.strip()]
+    
+    user_data = db.get_user(user_id)
+    user_data['monthly_goals'] = [
+        {
+            'goal': g, 
+            'created': datetime.now().isoformat(), 
+            'progress': 0,
+            'milestones': []
+        }
+        for g in goals[:3]
+    ]
+    db.save_user(user_id, user_data)
+    
+    await update.message.reply_text(
+        f"✅ *Goals Set!*\n" + 
+        "\n".join([f"{i+1}. {g}" for i, g in enumerate(goals[:3])]) +
+        "\n\n🎯 Now, what *HABITS* do you want to build?\n"
+        "(One per line, e.g., 'Drink 8 glasses of water', 'Exercise 30min')",
+        parse_mode='Markdown'
+    )
+    return HABITS_INPUT
+
+async def receive_habits(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    habits_text = update.message.text
+    habits = [h.strip() for h in habits_text.split('\n') if h.strip()]
+    
+    user_data = db.get_user(user_id)
+    user_data['habits'] = [
+        {
+            'habit': h, 
+            'tracking': [],
+            'streak': 0,
+            'best_streak': 0
+        } 
+        for h in habits
+    ]
+    db.save_user(user_id, user_data)
+    
+    keyboard = [
+        ['📋 Main Menu', '❓ Help']
+    ]
+    
+    await update.message.reply_text(
+        f"🎯 *Perfect! Tracking {len(habits)} habits*\n\n"
+        f"Setup complete! Here's what you can do:\n\n"
+        f"*Quick Start:*\n"
+        f"📸 /photo - Photo of to-do list\n"
+        f"🎤 /voice - Voice note tasks\n"
+        f"✏️ /manual - Type tasks\n\n"
+        f"*Daily Commands:*\n"
+        f"✅ /habits - Check habits\n"
+        f"🍅 /pomodoro - Start focus timer\n"
+        f"📊 /status - Today's progress\n\n"
+        f"*Management:*\n"
+        f"🔁 /recurring - Recurring tasks\n"
+        f"🏷️ /categories - Task categories\n"
+        f"🎯 /goals - Update goals\n"
+        f"👥 /team - Team features\n\n"
+        f"*Reports:*\n"
+        f"📈 /report - View reports\n"
+        f"📄 /export - Export PDF",
+        parse_mode='Markdown',
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    )
+    return ConversationHandler.END
+
+# ==================== PHOTO & VOICE TASKS ====================
+
+async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    
+    await update.message.reply_text("📸 Processing your image...")
+    
+    photo = await update.message.photo[-1].get_file()
+    photo_bytes = await photo.download_as_bytearray()
+    
+    text = extract_text_from_image(bytes(photo_bytes))
+    
+    if not text:
+        await update.message.reply_text("❌ Could not read text. Try /manual or /voice instead.")
+        return ConversationHandler.END
+    
+    tasks = [line.strip() for line in text.split('\n') if line.strip()]
+    context.user_data['pending_tasks'] = tasks
+    
+    task_list = "\n".join([f"{i+1}. {t}" for i, t in enumerate(tasks)])
+    
+    keyboard = [['✅ Confirm', '✏️ Modify', '❌ Cancel']]
+    
+    await update.message.reply_text(
+        f"📋 *Found {len(tasks)} tasks:*\n\n{task_list}\n",
+        parse_mode='Markdown',
+        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+    )
+    return TASK_CONFIRM
+
+async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    
+    await update.message.reply_text("🎤 Processing your voice note...")
+    
+    voice = await update.message.voice.get_file()
+    voice_path = f"voice_{user_id}.ogg"
+    await voice.download_to_drive(voice_path)
+    
+    text = convert_voice_to_text(voice_path)
+    os.remove(voice_path)
+    
+    if not text:
+        await update.message.reply_text("❌ Could not understand audio. Try speaking clearly or use /manual.")
+        return ConversationHandler.END
+    
+    tasks = [t.strip() for t in text.split('.') if t.strip()]
+    context.user_data['pending_tasks'] = tasks
+    
+    task_list = "\n".join([f"{i+1}. {t}" for i, t in enumerate(tasks)])
+    
+    keyboard = [['✅ Confirm', '✏️ Modify', '❌ Cancel']]
+    
+    await update.message.reply_text(
+        f"🎤 *Heard:*\n\n{task_list}\n",
+        parse_mode='Markdown',
+        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+    )
+    return TASK_CONFIRM
+
+# ==================== TASK MANAGEMENT ====================
+
+async def confirm_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    response = update.message.text.lower()
+    
+    if '✅' in response or 'confirm' in response:
+        tasks = context.user_data.get('pending_tasks', [])
+        context.user_data['confirmed_tasks'] = tasks
+        context.user_data['current_task_index'] = 0
+        
+        # Show category selection
+        user_id = update.effective_user.id
+        user_data = db.get_user(user_id)
+        categories = user_data.get('categories', ['Work', 'Personal', 'Health'])
+        
+        keyboard = [[cat] for cat in categories] + [['Skip Categories']]
+        
+        await update.message.reply_text(
+            f"🏷️ *Task 1:* {tasks[0]}\n\nSelect category:",
+            parse_mode='Markdown',
+            reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+        )
+        return CATEGORY_SELECT
+    
+    elif '✏️' in response or 'modify' in response:
+        await update.message.reply_text("✏️ Send corrected task list (one per line):")
+        return TASK_MODIFY
+    
+    else:
+        await update.message.reply_text("❌ Cancelled. Use /photo, /voice, or /manual to try again.")
+        return ConversationHandler.END
+
+async def select_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    category = update.message.text
+    tasks = context.user_data.get('confirmed_tasks', [])
+    index = context.user_data.get('current_task_index', 0)
+    
+    if 'task_data' not in context.user_data:
+        context.user_data['task_data'] = []
+    
+    context.user_data['task_data'].append({
+        'task': tasks[index],
+        'category': category if category != 'Skip Categories' else 'General'
+    })
+    
+    # Ask about recurring
+    keyboard = [
+        ['📅 Daily', '📆 Weekly', '🔄 Custom'],
+        ['⏭️ One-time only']
+    ]
+    
+    await update.message.reply_text(
+        f"🔁 Is this a *recurring* task?\n\nTask: {tasks[index]}",
+        parse_mode='Markdown',
+        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+    )
+    return RECURRING_SELECT
+
+async def select_recurring(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    recurring = update.message.text
+    tasks = context.user_data.get('confirmed_tasks', [])
+    index = context.user_data.get('current_task_index', 0)
+    
+    task_data = context.user_data['task_data'][-1]
+    
+    if '📅' in recurring:
+        task_data['recurring'] = 'daily'
+    elif '📆' in recurring:
+        task_data['recurring'] = 'weekly'
+    elif '🔄' in recurring:
+        task_data['recurring'] = 'custom'
+    else:
+        task_data['recurring'] = None
+    
+    # Now ask for time
+    await update.message.reply_text(
+        f"⏰ *Task:* {tasks[index]}\n\n"
+        f"Enter time:\n"
+        f"• HH:MM format (e.g., 14:30)\n"
+        f"• Or duration in minutes (e.g., 30)",
+        parse_mode='Markdown'
+    )
+    return TIME_ALLOCATION
+
+async def allocate_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    time_input = update.message.text
+    tasks = context.user_data.get('confirmed_tasks', [])
+    index = context.user_data.get('current_task_index', 0)
+    
+    task_data = context.user_data['task_data'][-1]
+    task_data['time'] = time_input
+    task_data['completed'] = False
+    task_data['created'] = datetime.now().isoformat()
+    
+    index += 1
+    context.user_data['current_task_index'] = index
+    
+    if index < len(tasks):
+        user_data = db.get_user(user_id)
+        categories = user_data.get('categories', ['Work', 'Personal', 'Health'])
+        keyboard = [[cat] for cat in categories] + [['Skip Categories']]
+        
+        await update.message.reply_text(
+            f"🏷️ *Task {index + 1}:* {tasks[index]}\n\nSelect category:",
+            parse_mode='Markdown',
+            reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+        )
+        return CATEGORY_SELECT
+    else:
+        # Save all tasks
+        user_data = db.get_user(user_id)
+        for task in context.user_data['task_data']:
+            if task.get('recurring'):
+                user_data['recurring_tasks'].append(task)
+            else:
+                user_data['tasks'].append(task)
+        
+        db.save_user(user_id, user_data)
+        
+        # Award points
+        points = len(tasks) * 5
+        user_data['points'] += points
+        
+        summary = "\n".join([
+            f"{i+1}. [{t['category']}] {t['task']} - {t['time']}" +
+            (f" ({t['recurring']})" if t.get('recurring') else "")
+            for i, t in enumerate(context.user_data['task_data'])
+        ])
+        
+        await update.message.reply_text(
+            f"✅ *All set!*\n\n{summary}\n\n"
+            f"🎉 +{points} points earned!\n"
+            f"I'll remind you at scheduled times! 🔔",
+            parse_mode='Markdown'
+        )
+        return ConversationHandler.END
+
+async def modify_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tasks_text = update.message.text
+    tasks = [t.strip() for t in tasks_text.split('\n') if t.strip()]
+    
+    context.user_data['confirmed_tasks'] = tasks
+    context.user_data['current_task_index'] = 0
+    
+    user_id = update.effective_user.id
+    user_data = db.get_user(user_id)
+    categories = user_data.get('categories', ['Work', 'Personal', 'Health'])
+    
+    keyboard = [[cat] for cat in categories] + [['Skip Categories']]
+    
+    await update.message.reply_text(
+        f"✅ *Updated!*\n\n🏷️ Task 1: {tasks[0]}\n\nSelect category:",
+        parse_mode='Markdown',
+        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+    )
+    return CATEGORY_SELECT
+
+# ==================== POMODORO TIMER ====================
+
+async def pomodoro_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_data = db.get_user(user_id)
+    settings = user_data.get('pomodoro_settings', {'work': 25, 'break': 5, 'long_break': 15})
+    
+    keyboard = [
+        [InlineKeyboardButton("🍅 Start Work (25min)", callback_data="pomo_work")],
+        [InlineKeyboardButton("☕ Short Break (5min)", callback_data="pomo_break")],
+        [InlineKeyboardButton("🌙 Long Break (15min)", callback_data="pomo_long")],
+        [InlineKeyboardButton("⚙️ Settings", callback_data="pomo_settings")]
+    ]
+    
+    count = user_data.get('pomodoro_count', 0)
+    
+    await update.message.reply_text(
+        f"🍅 *Pomodoro Timer*\n\n"
+        f"Completed today: {count} pomodoros\n\n"
+        f"Work: {settings['work']}min | Break: {settings['break']}min | Long: {settings['long_break']}min",
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def pomodoro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    user_data = db.get_user(user_id)
+    settings = user_data['pomodoro_settings']
+    
+    if query.data == "pomo_work":
+        duration = settings['work']
+        msg = f"🍅 *Work session started!*\n\nFocus for {duration} minutes.\nI'll notify you when it's done!"
+        
+        # Schedule notification
+        context.job_queue.run_once(
+            pomodoro_complete,
+            duration * 60,
+            data={'user_id': user_id, 'type': 'work'},
+            name=f'pomo_{user_id}'
+        )
+        
+        user_data['pomodoro_count'] += 1
+        user_data['points'] += 10
+        db.save_user(user_id, user_data)
+        
+    elif query.data == "pomo_break":
+        duration = settings['break']
+        msg = f"☕ *Break time!*\n\nRelax for {duration} minutes."
+        
+        context.job_queue.run_once(
+            pomodoro_complete,
+            duration * 60,
+            data={'user_id': user_id, 'type': 'break'},
+            name=f'pomo_{user_id}'
+        )
+    
+    elif query.data == "pomo_long":
+        duration = settings['long_break']
+        msg = f"🌙 *Long break!*\n\nRecharge for {duration} minutes."
+        
+        context.job_queue.run_once(
+            pomodoro_complete,
+            duration * 60,
+            data={'user_id': user_id, 'type': 'long_break'},
+            name=f'pomo_{user_id}'
+        )
+    
+    else:
+        msg = "⚙️ Pomodoro settings coming soon!"
+    
+    await query.edit_message_text(msg, parse_mode='Markdown')
+
+async def pomodoro_complete(context: ContextTypes.DEFAULT_TYPE):
+    job = context.job
+    user_id = job.data['user_id']
+    session_type = job.data['type']
+    
+    if session_type == 'work':
+        msg = "🎉 *Work session complete!*\n\nGreat focus! Take a break now. 🍵"
+    else:
+        msg = "⏰ *Break's over!*\n\nReady for another work session? 🍅"
+    
+    await context.bot.send_message(chat_id=user_id, text=msg, parse_mode='Markdown')
+
+# ==================== HABITS & STREAKS ====================
+
+async def habits_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_data = db.get_user(user_id)
+    habits = user_data.get('habits', [])
+    
+    if not habits:
+        await update.message.reply_text("No habits set. Use /start to set up.")
+        return
+    
+    today = datetime.now().date().isoformat()
+    
+    habit_list = []
+    for i, habit in enumerate(habits):
+        streak = habit.get('streak', 0)
+        best = habit.get('best_streak', 0)
+        done_today = today in habit.get('tracking', [])
+        
+        status = "✅" if done_today else "⬜"
+        habit_list.append(f"{status} {habit['habit']} - 🔥{streak} (best: {best})")
+    
+    keyboard = [[h['habit']] for h in habits if today not in h.get('tracking', [])]
+    if keyboard:
+        keyboard.append(['✨ All Done!'])
+    
+    await update.message.reply_text(
+        f"📊 *Daily Habits*\n\n" + "\n".join(habit_list) + "\n\n" +
+        ("Tap to check off:" if keyboard else "🎉 All habits done today!"),
+        parse_mode='Markdown',
+        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True) if keyboard else None
+    )
+
+async def habit_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    habit_name = update.message.text
+    
+    if habit_name == '✨ All Done!':
+        await update.message.reply_text("🎉 Amazing! All habits completed!")
+        return
+    
+    user_data = db.get_user(user_id)
+    today = datetime.now().date().isoformat()
+    
+    for habit in user_data['habits']:
+        if habit['habit'] == habit_name:
+            if today not in habit['tracking']:
+                habit['tracking'].append(today)
+                habit['streak'] = habit.get('streak', 0) + 1
+                
+                if habit['streak'] > habit.get('best_streak', 0):
+                    habit['best_streak'] = habit['streak']
+                
+                # Award points
+                points = 5 + (habit['streak'] // 7) * 5  # Bonus for weekly streaks
+                user_data['points'] += points
+                
+                # Check achievements
+                if habit['streak'] == 7:
+                    user_data['achievements'].append(f"🏆 Week Warrior - {habit_name}")
+                elif habit['streak'] == 30:
+                    user_data['achievements'].append(f"👑 Month Master - {habit_name}")
+                
+                db.save_user(user_id, user_data)
+                
+                msg = f"✅ *{habit_name}* checked!\n\n🔥 Streak: {habit['streak']} days\n🎉 +{points} points"
+                
+                if habit['streak'] % 7 == 0:
+                    msg += f"\n\n🎊 *MILESTONE!* {habit['streak']} day streak!"
+                
+                await update.message.reply_text(msg, parse_mode='Markdown')
+                break
+
+# ==================== TEAM FEATURES ====================
+
+async def team_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_data = db.get_user(user_id)
+    
+    keyboard = [
+        [InlineKeyboardButton("➕ Create Team", callback_data="team_create")],
+        [InlineKeyboardButton("🔗 Join Team", callback_data="team_join")],
+        [InlineKeyboardButton("👥 My Team", callback_data="team_view")],
+        [InlineKeyboardButton("🏆 Leaderboard", callback_data="team_leaderboard")]
+    ]
+    
+    await update.message.reply_text(
+        "👥 *Team Accountability*\n\n"
+        "Share goals, compete on leaderboards,\nand hold each other accountable!",
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def team_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    
+    if query.data == "team_create":
+        team_id = f"team_{user_id}_{int(time.time())}"
+        user_data = db.get_user(user_id)
+        user_data['team_id'] = team_id
+        
+        team_data = {
+            'members': [user_id],
+            'created_by': user_id,
+            'shared_goals': []
+        }
+        db.save_team(team_id, team_data)
+        db.save_user(user_id, user_data)
+        
+        await query.edit_message_text(
+            f"✅ *Team Created!*\n\n"
+            f"Team ID: `{team_id}`\n\n"
+            f"Share this ID with teammates to invite them!",
+            parse_mode='Markdown'
+        )
+    
+    elif query.data == "team_leaderboard":
+        user_data = db.get_user(user_id)
+        team_id = user_data.get('team_id')
+        
+        if not team_id:
+            await query.edit_message_text("❌ You're not in a team yet!")
+            return
+        
+        team = db.get_team(team_id)
+        leaderboard = []
+        
+        for member_id in team['members']:
+            member_data = db.get_user(member_id)
+            leaderboard.append({
+                'id': member_id,
+                'points': member_data.get('points', 0)
+            })
+        
+        leaderboard.sort(key=lambda x: x['points'], reverse=True)
+        
+        board_text = "\n".join([
+            f"{i+1}. User {m['id']} - {m['points']} pts"
+            for i, m in enumerate(leaderboard[:10])
+        ])
+        
+        await query.edit_message_text(
+            f"🏆 *Team Leaderboard*\n\n{board_text}",
+            parse_mode='Markdown'
+        )
+
+# ==================== REPORTS & PDF EXPORT ====================
+
+async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        ['📅 Daily', '📆 Weekly'],
+        ['📊 Monthly', '📈 Annual'],
+        ['🏆 Achievements']
+    ]
+    
+    await update.message.reply_text(
+        "📊 *Select Report Type:*",
+        parse_mode='Markdown',
+        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+    )
+
+async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    report_type = update.message.text
+    user_data = db.get_user(user_id)
+    
+    if '📅' in report_type or 'Daily' in report_type:
+        report = generate_daily_report(user_data)
+    elif '📆' in report_type or 'Weekly' in report_type:
+        report = generate_weekly_report(user_data)
+    elif '📊' in report_type or 'Monthly' in report_type:
+        report = generate_monthly_report(user_data)
+    elif '📈' in report_type or 'Annual' in report_type:
+        report = generate_annual_report(user_data)
+    else:
+        report = generate_achievements_report(user_data)
+    
+    await update.message.reply_text(report, parse_mode='Markdown')
+
+def generate_daily_report(user_data):
+    tasks = user_data.get('tasks', [])
+    completed = [t for t in tasks if t.get('completed')]
+    habits = user_data.get('habits', [])
+    today = datetime.now().date().isoformat()
+    habits_done = sum(1 for h in habits if today in h.get('tracking', []))
+    
+    return (
+        f"📅 *Daily Report - {datetime.now().strftime('%B %d, %Y')}*\n\n"
+        f"✅ Tasks: {len(completed)}/{len(tasks)}\n"
+        f"🎯 Habits: {habits_done}/{len(habits)}\n"
+        f"🍅 Pomodoros: {user_data.get('pomodoro_count', 0)}\n"
+        f"⭐ Points: {user_data.get('points', 0)}\n\n"
+        f"{'🎉 Great day!' if len(completed) == len(tasks) else '💪 Keep pushing!'}"
+    )
+
+def generate_weekly_report(user_data):
+    return "📆 *Weekly Report*\n\nComing soon with detailed analytics!"
+
+def generate_monthly_report(user_data):
+    goals = user_data.get('monthly_goals', [])
+    habits = user_data.get('habits', [])
+    
+    goal_progress = "\n".join([f"• {g['goal']}: {g['progress']}%" for g in goals])
+    avg_streak = sum(h.get('streak', 0) for h in habits) / len(habits) if habits else 0
+    
+    return (
+        f"📊 *Monthly Report*\n\n"
+        f"*Goals Progress:*\n{goal_progress}\n\n"
+        f"*Habits:*\n"
+        f"Average streak: {avg_streak:.1f} days\n"
+        f"Total points: {user_data.get('points', 0)}"
+    )
+
+def generate_annual_report(user_data):
+    return "📈 *Annual Report*\n\nYour year in review - coming soon!"
+
+def generate_achievements_report(user_data):
+    achievements = user_data.get('achievements', [])
+    
+    if not achievements:
+        return "🏆 *Achievements*\n\nNo achievements yet. Keep going!"
+    
+    return "🏆 *Your Achievements*\n\n" + "\n".join(achievements)
+
+async def export_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_data = db.get_user(user_id)
+    
+    await update.message.reply_text("📄 Generating PDF report...")
+    
+    # Generate PDF
+    pdf_path = f"report_{user_id}.pdf"
+    create_pdf_report(user_data, pdf_path)
+    
+    # Send PDF
+    with open(pdf_path, 'rb') as pdf:
+        await update.message.reply_document(
+            document=pdf,
+            filename=f"ProductivityReport_{datetime.now().strftime('%Y%m%d')}.pdf",
+            caption="📊 Your productivity report"
+        )
+    
+    # Cleanup
+    os.remove(pdf_path)
+
+def create_pdf_report(user_data, filename):
+    """Generate beautiful PDF report"""
+    doc = SimpleDocTemplate(filename, pagesize=letter)
+    styles = getSampleStyleSheet()
+    story = []
+    
+    # Title
+    title = Paragraph(f"<b>Productivity Report - {datetime.now().strftime('%B %Y')}</b>", styles['Title'])
+    story.append(title)
+    story.append(Paragraph("<br/><br/>", styles['Normal']))
+    
+    # Goals section
+    story.append(Paragraph("<b>Monthly Goals</b>", styles['Heading2']))
+    goals = user_data.get('monthly_goals', [])
+    goal_data = [['Goal', 'Progress']]
+    for g in goals:
+        goal_data.append([g['goal'], f"{g['progress']}%"])
+    
+    goal_table = Table(goal_data)
+    goal_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+    ]))
+    story.append(goal_table)
+    
+    # Habits section
+    story.append(Paragraph("<br/><b>Habit Streaks</b>", styles['Heading2']))
+    habits = user_data.get('habits', [])
+    habit_data = [['Habit', 'Current Streak', 'Best Streak']]
+    for h in habits:
+        habit_data.append([h['habit'], str(h.get('streak', 0)), str(h.get('best_streak', 0))])
+    
+    habit_table = Table(habit_data)
+    habit_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+    ]))
+    story.append(habit_table)
+    
+    # Stats
+    story.append(Paragraph(f"<br/><b>Statistics</b>", styles['Heading2']))
+    story.append(Paragraph(f"Total Points: {user_data.get('points', 0)}", styles['Normal']))
+    story.append(Paragraph(f"Pomodoros: {user_data.get('pomodoro_count', 0)}", styles['Normal']))
+    story.append(Paragraph(f"Achievements: {len(user_data.get('achievements', []))}", styles['Normal']))
+    
+    doc.build(story)
+
+# ==================== MAIN ====================
+
+def main():
+    BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', 'YOUR_BOT_TOKEN')
+    
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    # Setup conversation
+    setup_conv = ConversationHandler(
+        entry_points=[CommandHandler('start', start)],
+        states={
+            GOALS_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_goals)],
+            HABITS_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_habits)],
+        },
+        fallbacks=[CommandHandler('start', start)]
+    )
+    
+    # Task input conversations
+    photo_conv = ConversationHandler(
+        entry_points=[
+            CommandHandler('photo', photo_handler),
+            MessageHandler(filters.PHOTO, photo_handler)
+        ],
+        states={
+            TASK_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_tasks)],
+            CATEGORY_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_category)],
+            RECURRING_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_recurring)],
+            TIME_ALLOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, allocate_time)],
+            TASK_MODIFY: [MessageHandler(filters.TEXT & ~filters.COMMAND, modify_tasks)],
+        },
+        fallbacks=[]
+    )
+    
+    voice_conv = ConversationHandler(
+        entry_points=[
+            CommandHandler('voice', voice_handler),
+            MessageHandler(filters.VOICE, voice_handler)
+        ],
+        states={
+            TASK_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_tasks)],
+            CATEGORY_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_category)],
+            RECURRING_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_recurring)],
+            TIME_ALLOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, allocate_time)],
+            TASK_MODIFY: [MessageHandler(filters.TEXT & ~filters.COMMAND, modify_tasks)],
+        },
+        fallbacks=[]
+    )
+    
+    # Handlers
+    application.add_handler(setup_conv)
+    application.add_handler(photo_conv)
+    application.add_handler(voice_conv)
+    application.add_handler(CommandHandler('pomodoro', pomodoro_command))
+    application.add_handler(CommandHandler('habits', habits_command))
+    application.add_handler(CommandHandler('team', team_command))
+    application.add_handler(CommandHandler('report', report_command))
+    application.add_handler(CommandHandler('export', export_pdf))
+    application.add_handler(CallbackQueryHandler(pomodoro_callback, pattern='^pomo_'))
+    application.add_handler(CallbackQueryHandler(team_callback, pattern='^team_'))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, habit_check))
+    
+    # Start
+    application.run_polling()
+
+if __name__ == '__main__':
+    main()
