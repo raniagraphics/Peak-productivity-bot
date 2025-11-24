@@ -6,7 +6,7 @@ voice_*.ogg
 voice_*.wav
 venv/
 .DS_Store
-
 git add .
 git commit -m "Simplified version - removed OCR and voice"
 git push origin main
+
