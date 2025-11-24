@@ -3,8 +3,6 @@
 A Telegram bot for managing tasks, habits, and goals.
 
 ## Features
-- Photo OCR for task lists
-- Voice note task entry
 - Pomodoro timer
 - Habit tracking with streaks
 - Team accountability
@@ -16,3 +14,4 @@ Deployed on Render.com
 git add .
 git commit -m "Simplified version - removed OCR and voice"
 git push origin main
+
