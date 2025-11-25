@@ -846,7 +846,6 @@ def main():
         application.add_handler(CallbackQueryHandler(language_callback, pattern='^lang_(en|ar)'))
         application.add_handler(CallbackQueryHandler(pomodoro_callback, pattern='^pomo_'))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, habit_check))
-        )
         
         # Start the web server
         application.run_webhook(
@@ -879,4 +878,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
