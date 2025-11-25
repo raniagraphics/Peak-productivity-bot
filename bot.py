@@ -833,7 +833,27 @@ def main():
         logger.info(f"🚀 Starting webhook for app {APP_NAME} on port {PORT}")
         
         application = Application.builder().token(BOT_TOKEN).build()
-        
+        setup_conv = ConversationHandler(
+    entry_points=[CommandHandler('start', start)],
+    states={
+        LANGUAGE_SELECT: [CallbackQueryHandler(language_start_callback, pattern='^lang_.*_start')],
+        GOALS_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_goals)],
+        HABITS_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_habits)],
+    },
+    fallbacks=[CommandHandler('start', start)]
+)
+
+        task_conv = ConversationHandler(
+    entry_points=[CommandHandler('add', add_tasks)],
+    states={
+        TASK_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_tasks)],
+        CATEGORY_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_category)],
+        RECURRING_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_recurring)],
+        TIME_ALLOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, allocate_time)],
+    },
+    fallbacks=[CommandHandler('add', add_tasks)]
+)
+
         # --- PASTE YOUR 11 application.add_handler(...) LINES HERE ---
         # (application.add_handler(setup_conv)
         application.add_handler(task_conv)
@@ -859,7 +879,26 @@ def main():
         logger.info("🚀 Starting polling mode for local testing...")
         
         application = Application.builder().token(BOT_TOKEN).build()
-        
+        setup_conv = ConversationHandler(
+    entry_points=[CommandHandler('start', start)],
+    states={
+        LANGUAGE_SELECT: [CallbackQueryHandler(language_start_callback, pattern='^lang_.*_start')],
+        GOALS_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_goals)],
+        HABITS_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_habits)],
+    },
+    fallbacks=[CommandHandler('start', start)]
+)
+task_conv = ConversationHandler(
+    entry_points=[CommandHandler('add', add_tasks)],
+    states={
+        TASK_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_tasks)],
+        CATEGORY_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_category)],
+        RECURRING_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_recurring)],
+        TIME_ALLOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, allocate_time)],
+    },
+    fallbacks=[CommandHandler('add', add_tasks)]
+)
+
         # --- PASTE YOUR 11 application.add_handler(...) LINES HERE ---
         # (application.add_handler(setup_conv)
         application.add_handler(task_conv)
@@ -877,6 +916,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
