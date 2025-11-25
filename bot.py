@@ -872,12 +872,12 @@ def main():
         application.add_handler(CallbackQueryHandler(language_callback, pattern='^lang_(en|ar)'))
         application.add_handler(CallbackQueryHandler(pomodoro_callback, pattern='^pomo_'))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, habit_check))
-    )
         
         application.run_polling(poll_interval=1.0)
 
 if __name__ == '__main__':
     main()
+
 
 
 
