@@ -843,7 +843,7 @@ def main():
         application.add_handler(CommandHandler('status', status_command))
         application.add_handler(CommandHandler('export', export_pdf))
         application.add_handler(CommandHandler('help', help_command))
-       application.add_handler(CallbackQueryHandler(language_callback, pattern='^lang_(en|ar)'))
+        application.add_handler(CallbackQueryHandler(language_callback, pattern='^lang_(en|ar)'))
         application.add_handler(CallbackQueryHandler(pomodoro_callback, pattern='^pomo_'))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, habit_check))
         )
