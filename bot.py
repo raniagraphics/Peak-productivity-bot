@@ -830,7 +830,7 @@ def main():
     setup_conv = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
-            LANGUAGE_SELECT: [CallbackQueryHandler(language_start_callback, pattern='^lang_.*_start)],
+             LANGUAGE_SELECT: [CallbackQueryHandler(language_start_callback, pattern='^lang_.*_start')],
             GOALS_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_goals)],
             HABITS_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_habits)],
         },
@@ -865,3 +865,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
