@@ -1,4 +1,4 @@
-import os
+import os  
 import json
 import logging
 from datetime import datetime, timedelta
@@ -236,7 +236,7 @@ class ProductivityDB:
     def save_team(self, team_id, data):
         self.teams[team_id] = data
 
- import os # Make sure this is at the very top of your file
+# Make sure this is at the very top of your file
 
 # Get the database URL from the environment variable
 DATABASE_URL = os.getenv('DATABASE_URL')
@@ -933,6 +933,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
