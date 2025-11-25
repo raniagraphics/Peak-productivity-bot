@@ -194,8 +194,14 @@ TRANSLATIONS = {
 }
 
 # Database class
+
 class ProductivityDB:
-    def __init__(self):
+    # Change this line:
+    # def __init__(self):
+    # To this line:
+    def __init__(self, db_url):
+        # Now, use db_url to establish your connection
+        # ... your connection logic here ...
         self.users = {}
         self.teams = {}
     
@@ -230,7 +236,14 @@ class ProductivityDB:
     def save_team(self, team_id, data):
         self.teams[team_id] = data
 
-db = ProductivityDB()
+ import os # Make sure this is at the very top of your file
+
+# Get the database URL from the environment variable
+DATABASE_URL = os.getenv('DATABASE_URL')
+
+# Pass the URL to your database class
+db = ProductivityDB(DATABASE_URL)
+
 
 # Conversation states
 (LANGUAGE_SELECT, GOALS_INPUT, HABITS_INPUT, TASK_INPUT, TASK_CONFIRM, 
@@ -920,6 +933,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
