@@ -873,7 +873,6 @@ def main():
             port=PORT,
             url_path=BOT_TOKEN,
             webhook_url=f"https://{APP_NAME}.onrender.com/{BOT_TOKEN}", 
-            timeout=30
          )
     else:
         # --- POLLING MODE FOR LOCAL TESTING ---
@@ -917,6 +916,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
