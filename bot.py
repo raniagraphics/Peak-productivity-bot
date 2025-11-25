@@ -516,4 +516,352 @@ async def allocate_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if task.get('recurring'):
                 user_data['recurring_tasks'].append(task)
             else:
-                user_data['
+                user_data['tasks'].append(task)
+        
+        points = len(tasks) * 5
+        user_data['points'] += points
+        
+        db.save_user(user_id, user_data)
+        
+        summary = "\n".join([
+            f"{i+1}. [{t['category']}] {t['task']} - {t['time']}" +
+            (f" ({t['recurring']})" if t.get('recurring') else "")
+            for i, t in enumerate(context.user_data['task_data'])
+        ])
+        
+        msg = get_text(user_id, 'all_set', summary=summary, points=points)
+        
+        await update.message.reply_text(msg, parse_mode='Markdown')
+        return ConversationHandler.END
+
+# ==================== POMODORO TIMER ====================
+
+async def pomodoro_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_data = db.get_user(user_id)
+    settings = user_data.get('pomodoro_settings', {'work': 25, 'break': 5, 'long_break': 15})
+    
+    keyboard = [
+        [InlineKeyboardButton(get_text(user_id, 'start_work'), callback_data="pomo_work")],
+        [InlineKeyboardButton(get_text(user_id, 'short_break'), callback_data="pomo_break")],
+        [InlineKeyboardButton(get_text(user_id, 'long_break_btn'), callback_data="pomo_long")]
+    ]
+    
+    count = user_data.get('pomodoro_count', 0)
+    
+    msg = get_text(user_id, 'pomodoro_title', 
+                   count=count, 
+                   work=settings['work'], 
+                   break_time=settings['break'], 
+                   long_break=settings['long_break'])
+    
+    await update.message.reply_text(
+        msg,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def pomodoro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    user_data = db.get_user(user_id)
+    settings = user_data['pomodoro_settings']
+    
+    if query.data == "pomo_work":
+        duration = settings['work']
+        msg = get_text(user_id, 'work_started', duration=duration)
+        
+        context.job_queue.run_once(
+            pomodoro_complete,
+            duration * 60,
+            data={'user_id': user_id, 'type': 'work'},
+            name=f'pomo_{user_id}'
+        )
+        
+        user_data['pomodoro_count'] += 1
+        user_data['points'] += 10
+        db.save_user(user_id, user_data)
+        
+    elif query.data == "pomo_break":
+        duration = settings['break']
+        msg = get_text(user_id, 'break_time', duration=duration)
+        
+        context.job_queue.run_once(
+            pomodoro_complete,
+            duration * 60,
+            data={'user_id': user_id, 'type': 'break'},
+            name=f'pomo_{user_id}'
+        )
+    
+    elif query.data == "pomo_long":
+        duration = settings['long_break']
+        msg = get_text(user_id, 'long_break', duration=duration)
+        
+        context.job_queue.run_once(
+            pomodoro_complete,
+            duration * 60,
+            data={'user_id': user_id, 'type': 'long_break'},
+            name=f'pomo_{user_id}'
+        )
+    
+    await query.edit_message_text(msg, parse_mode='Markdown')
+
+async def pomodoro_complete(context: ContextTypes.DEFAULT_TYPE):
+    job = context.job
+    user_id = job.data['user_id']
+    session_type = job.data['type']
+    
+    if session_type == 'work':
+        msg = get_text(user_id, 'work_complete')
+    else:
+        msg = get_text(user_id, 'break_over')
+    
+    await context.bot.send_message(chat_id=user_id, text=msg, parse_mode='Markdown')
+
+# ==================== HABITS & STREAKS ====================
+
+async def habits_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_data = db.get_user(user_id)
+    habits = user_data.get('habits', [])
+    
+    if not habits:
+        msg = get_text(user_id, 'no_habits')
+        await update.message.reply_text(msg)
+        return
+    
+    today = datetime.now().date().isoformat()
+    
+    habit_list = []
+    for i, habit in enumerate(habits):
+        streak = habit.get('streak', 0)
+        best = habit.get('best_streak', 0)
+        done_today = today in habit.get('tracking', [])
+        
+        status = "✅" if done_today else "⬜"
+        habit_list.append(f"{status} {habit['habit']} - 🔥{streak} (best: {best})")
+    
+    keyboard = [[h['habit']] for h in habits if today not in h.get('tracking', [])]
+    if keyboard:
+        keyboard.append([get_text(user_id, 'all_done')])
+    
+    msg = get_text(user_id, 'daily_habits') + "\n".join(habit_list) + "\n\n" + (
+        get_text(user_id, 'tap_to_check') if keyboard else get_text(user_id, 'all_done_habits')
+    )
+    
+    await update.message.reply_text(
+        msg,
+        parse_mode='Markdown',
+        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True) if keyboard else None
+    )
+
+async def habit_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    habit_name = update.message.text
+    
+    all_done = get_text(user_id, 'all_done')
+    if all_done in habit_name:
+        await update.message.reply_text(get_text(user_id, 'all_done_habits'))
+        return
+    
+    user_data = db.get_user(user_id)
+    today = datetime.now().date().isoformat()
+    
+    for habit in user_data['habits']:
+        if habit['habit'] == habit_name:
+            if today not in habit['tracking']:
+                habit['tracking'].append(today)
+                habit['streak'] = habit.get('streak', 0) + 1
+                
+                if habit['streak'] > habit.get('best_streak', 0):
+                    habit['best_streak'] = habit['streak']
+                
+                points = 5 + (habit['streak'] // 7) * 5
+                user_data['points'] += points
+                
+                if habit['streak'] == 7:
+                    user_data['achievements'].append(f"🏆 Week Warrior - {habit_name}")
+                elif habit['streak'] == 30:
+                    user_data['achievements'].append(f"👑 Month Master - {habit_name}")
+                
+                db.save_user(user_id, user_data)
+                
+                msg = get_text(user_id, 'habit_checked', habit=habit_name, streak=habit['streak'], points=points)
+                
+                if habit['streak'] % 7 == 0:
+                    msg += get_text(user_id, 'milestone', streak=habit['streak'])
+                
+                await update.message.reply_text(msg, parse_mode='Markdown')
+                break
+
+# ==================== STATUS & REPORTS ====================
+
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_data = db.get_user(user_id)
+    
+    tasks = user_data.get('tasks', [])
+    completed = [t for t in tasks if t.get('completed')]
+    habits = user_data.get('habits', [])
+    today = datetime.now().date().isoformat()
+    habits_done = sum(1 for h in habits if today in h.get('tracking', []))
+    
+    status_text = get_text(user_id, 'status_title')
+    status_text += get_text(user_id, 'status_tasks', completed=len(completed), total=len(tasks))
+    status_text += get_text(user_id, 'status_habits', done=habits_done, total=len(habits))
+    status_text += get_text(user_id, 'status_pomodoros', count=user_data.get('pomodoro_count', 0))
+    status_text += get_text(user_id, 'status_points', points=user_data.get('points', 0))
+    
+    if len(completed) == len(tasks) and habits_done == len(habits):
+        status_text += get_text(user_id, 'great_day')
+    else:
+        status_text += get_text(user_id, 'keep_going')
+    
+    await update.message.reply_text(status_text, parse_mode='Markdown')
+
+async def export_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_data = db.get_user(user_id)
+    
+    msg = get_text(user_id, 'generating_pdf')
+    await update.message.reply_text(msg)
+    
+    pdf_path = f"report_{user_id}.pdf"
+    create_pdf_report(user_data, pdf_path, user_id)
+    
+    with open(pdf_path, 'rb') as pdf:
+        await update.message.reply_document(
+            document=pdf,
+            filename=f"ProductivityReport_{datetime.now().strftime('%Y%m%d')}.pdf",
+            caption="📊 Your productivity report"
+        )
+    
+    os.remove(pdf_path)
+
+def create_pdf_report(user_data, filename, user_id):
+    doc = SimpleDocTemplate(filename, pagesize=letter)
+    styles = getSampleStyleSheet()
+    story = []
+    
+    lang = user_data.get('language', 'en')
+    
+    title_text = "Productivity Report" if lang == 'en' else "تقرير الإنتاجية"
+    title = Paragraph(f"<b>{title_text} - {datetime.now().strftime('%B %Y')}</b>", styles['Title'])
+    story.append(title)
+    
+    goals = user_data.get('monthly_goals', [])
+    if goals:
+        goals_title = "Monthly Goals" if lang == 'en' else "الأهداف الشهرية"
+        story.append(Paragraph(f"<br/><b>{goals_title}</b>", styles['Heading2']))
+        goal_header = ['Goal', 'Progress'] if lang == 'en' else ['الهدف', 'التقدم']
+        goal_data = [goal_header]
+        for g in goals:
+            goal_data.append([g['goal'], f"{g['progress']}%"])
+        
+        goal_table = Table(goal_data)
+        goal_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        ]))
+        story.append(goal_table)
+    
+    habits = user_data.get('habits', [])
+    if habits:
+        habits_title = "Habit Streaks" if lang == 'en' else "سلاسل العادات"
+        story.append(Paragraph(f"<br/><b>{habits_title}</b>", styles['Heading2']))
+        habit_header = ['Habit', 'Current Streak', 'Best Streak'] if lang == 'en' else ['العادة', 'السلسلة الحالية', 'أفضل سلسلة']
+        habit_data = [habit_header]
+        for h in habits:
+            habit_data.append([h['habit'], str(h.get('streak', 0)), str(h.get('best_streak', 0))])
+        
+        habit_table = Table(habit_data)
+        habit_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        ]))
+        story.append(habit_table)
+    
+    stats_title = "Statistics" if lang == 'en' else "الإحصائيات"
+    story.append(Paragraph(f"<br/><b>{stats_title}</b>", styles['Heading2']))
+    
+    points_label = "Total Points" if lang == 'en' else "إجمالي النقاط"
+    pomo_label = "Pomodoros" if lang == 'en' else "بومودورو"
+    achieve_label = "Achievements" if lang == 'en' else "الإنجازات"
+    
+    story.append(Paragraph(f"{points_label}: {user_data.get('points', 0)}", styles['Normal']))
+    story.append(Paragraph(f"{pomo_label}: {user_data.get('pomodoro_count', 0)}", styles['Normal']))
+    story.append(Paragraph(f"{achieve_label}: {len(user_data.get('achievements', []))}", styles['Normal']))
+    
+    doc.build(story)
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    
+    help_text = get_text(user_id, 'help_title')
+    help_text += get_text(user_id, 'help_getting_started')
+    help_text += get_text(user_id, 'help_daily')
+    help_text += get_text(user_id, 'help_management')
+    help_text += get_text(user_id, 'help_reports')
+    help_text += get_text(user_id, 'help_tip')
+    
+    await update.message.reply_text(help_text, parse_mode='Markdown')
+
+# ==================== MAIN ====================
+
+def main():
+    BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+    
+    if not BOT_TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN not found in environment variables!")
+        return
+    
+    logger.info("🚀 Starting multilingual bot...")
+    
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    setup_conv = ConversationHandler(
+        entry_points=[CommandHandler('start', start)],
+        states={
+            LANGUAGE_SELECT: [CallbackQueryHandler(language_start_callback, pattern='^lang_.*_start)],
+            GOALS_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_goals)],
+            HABITS_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_habits)],
+        },
+        fallbacks=[CommandHandler('start', start)]
+    )
+    
+    task_conv = ConversationHandler(
+        entry_points=[CommandHandler('add', add_tasks)],
+        states={
+            TASK_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_tasks)],
+            CATEGORY_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_category)],
+            RECURRING_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_recurring)],
+            TIME_ALLOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, allocate_time)],
+        },
+        fallbacks=[CommandHandler('add', add_tasks)]
+    )
+    
+    application.add_handler(setup_conv)
+    application.add_handler(task_conv)
+    application.add_handler(CommandHandler('language', language_command))
+    application.add_handler(CommandHandler('pomodoro', pomodoro_command))
+    application.add_handler(CommandHandler('habits', habits_command))
+    application.add_handler(CommandHandler('status', status_command))
+    application.add_handler(CommandHandler('export', export_pdf))
+    application.add_handler(CommandHandler('help', help_command))
+    application.add_handler(CallbackQueryHandler(language_callback, pattern='^lang_(en|ar)))
+    application.add_handler(CallbackQueryHandler(pomodoro_callback, pattern='^pomo_'))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, habit_check))
+    
+    logger.info("✅ Multilingual bot started successfully!")
+    application.run_polling()
+
+if __name__ == '__main__':
+    main()
