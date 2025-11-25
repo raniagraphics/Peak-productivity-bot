@@ -830,7 +830,7 @@ def main():
     setup_conv = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
-             LANGUAGE_SELECT: [CallbackQueryHandler(language_start_callback, pattern='^lang_.*_start')],
+            LANGUAGE_SELECT: [CallbackQueryHandler(language_start_callback, pattern='^lang_.*_start')],
             GOALS_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_goals)],
             HABITS_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_habits)],
         },
@@ -856,8 +856,8 @@ def main():
     application.add_handler(CommandHandler('status', status_command))
     application.add_handler(CommandHandler('export', export_pdf))
     application.add_handler(CommandHandler('help', help_command))
-    application.add_handler(CallbackQueryHandler(language_callback, pattern='^lang_(en|ar)'))                                              
-    application.add_handler(CallbackQueryHandler(pomodoro_callback, pattern='^pomo_'))
+    application.add_handler(CallbackQueryHandler(language_callback, pattern='^lang_(en|ar)))'                                        
+    application.add_handler(CallbackQueryHandler(pomodoro_callback, pattern='^pomo_c))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, habit_check))
     
     logger.info("✅ Multilingual bot started successfully!")
@@ -865,5 +865,6 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
