@@ -851,12 +851,7 @@ application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, habit_ch
         # (Lines 851-861 from your original file)
         
         # Start the web server
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            url_path=BOT_TOKEN,
-            webhook_url=f"https://{APP_NAME}.onrender.com/{BOT_TOKEN}"
-         )
+        application.run_webhook(listen="0.0.0.0",port=PORT,url_path=BOT_TOKEN,webhook_url=f"https://{APP_NAME}.onrender.com/{BOT_TOKEN}")
     else:
         # --- POLLING MODE FOR LOCAL TESTING ---
         logger.info("🚀 Starting polling mode for local testing...")
