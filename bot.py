@@ -819,7 +819,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     # 1. Get environment variables
     BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-    APP_NAME = os.getenv('RENDER_APP_NAME') # We need this new variable
+    APP_NAME = os.getenv('RENDER_APP_NAME')
     
     if not BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN not found in environment variables!")
@@ -834,56 +834,48 @@ def main():
         
         application = Application.builder().token(BOT_TOKEN).build()
         
-        # --- YOUR HANDLERS GO HERE ---
-        # PASTE ALL YOUR application.add_handler(...) LINES HERE
-        application.add_handler(setup_conv)
-application.add_handler(task_conv)
-application.add_handler(CommandHandler('language', language_command))
-application.add_handler(CommandHandler('pomodoro', pomodoro_command))
-application.add_handler(CommandHandler('habits', habits_command))
-application.add_handler(CommandHandler('status', status_command))
-application.add_handler(CommandHandler('export', export_pdf))
-application.add_handler(CommandHandler('help', help_command))
-application.add_handler(CallbackQueryHandler(language_callback, pattern='^lang_(en|ar)')) # Note: This line is fixed
-application.add_handler(CallbackQueryHandler(pomodoro_callback, pattern='^pomo_'))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, habit_check))
-
-        # (Lines 851-861 from your original file)
+        # --- PASTE YOUR 11 application.add_handler(...) LINES HERE ---
+        # (application.add_handler(setup_conv)
+        application.add_handler(task_conv)
+        application.add_handler(CommandHandler('language', language_command))
+        application.add_handler(CommandHandler('pomodoro', pomodoro_command))
+        application.add_handler(CommandHandler('habits', habits_command))
+        application.add_handler(CommandHandler('status', status_command))
+        application.add_handler(CommandHandler('export', export_pdf))
+        application.add_handler(CommandHandler('help', help_command))
+        application.add_handler(CallbackQueryHandler(language_callback, pattern='^lang_(en|ar)))
+        application.add_handler(CallbackQueryHandler(pomodoro_callback, pattern='^pomo_'))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, habit_check))
+        )
         
         # Start the web server
- application.run_webhook(
-     listen="0.0.0.0",
-     port=PORT,
-     url_path=BOT_TOKEN,
-     webhook_url=f"https://{APP_NAME}.onrender.com/{BOT_TOKEN}"
- )
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=BOT_TOKEN,
+            webhook_url=f"https://{APP_NAME}.onrender.com/{BOT_TOKEN}"
+         )
     else:
         # --- POLLING MODE FOR LOCAL TESTING ---
         logger.info("🚀 Starting polling mode for local testing...")
         
         application = Application.builder().token(BOT_TOKEN).build()
         
-        # --- YOUR HANDLERS GO HERE ---
-        application.add_handler(setup_conv)
-application.add_handler(task_conv)
-application.add_handler(CommandHandler('language', language_command))
-application.add_handler(CommandHandler('pomodoro', pomodoro_command))
-application.add_handler(CommandHandler('habits', habits_command))
-application.add_handler(CommandHandler('status', status_command))
-application.add_handler(CommandHandler('export', export_pdf))
-application.add_handler(CommandHandler('help', help_command))
-application.add_handler(CallbackQueryHandler(language_callback, pattern='^lang_(en|ar)')) # Note: This line is fixed
-application.add_handler(CallbackQueryHandler(pomodoro_callback, pattern='^pomo_'))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, habit_check))
-
-        # PASTE ALL YOUR application.add_handler(...) LINES HERE
-        # (Lines 851-861 from your original file)
+        # --- PASTE YOUR 11 application.add_handler(...) LINES HERE ---
+        # (application.add_handler(setup_conv)
+        application.add_handler(task_conv)
+        application.add_handler(CommandHandler('language', language_command))
+        application.add_handler(CommandHandler('pomodoro', pomodoro_command))
+        application.add_handler(CommandHandler('habits', habits_command))
+        application.add_handler(CommandHandler('status', status_command))
+        application.add_handler(CommandHandler('export', export_pdf))
+        application.add_handler(CommandHandler('help', help_command))
+        application.add_handler(CallbackQueryHandler(language_callback, pattern='^lang_(en|ar)))
+        application.add_handler(CallbackQueryHandler(pomodoro_callback, pattern='^pomo_'))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, habit_check))
+    )
         
         application.run_polling(poll_interval=1.0)
 
 if __name__ == '__main__':
     main()
-
-
-
-
