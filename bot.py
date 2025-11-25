@@ -833,6 +833,8 @@ def main():
         logger.info(f"🚀 Starting webhook for app {APP_NAME} on port {PORT}")
         
         application = Application.builder().token(BOT_TOKEN).build()
+        application.job_queue.start() # <--- ADD THIS LINE
+
         setup_conv = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
@@ -879,6 +881,8 @@ def main():
         logger.info("🚀 Starting polling mode for local testing...")
         
         application = Application.builder().token(BOT_TOKEN).build()
+        application.job_queue.start() # <--- ADD THIS LINE
+
         setup_conv = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
@@ -916,6 +920,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
