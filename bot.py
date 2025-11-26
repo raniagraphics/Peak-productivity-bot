@@ -1,6 +1,9 @@
 import os  
 import json
 import logging
+DATABASE_URL = os.getenv('DATABASE_URL')
+# 2. Pass the URL to the class
+db = ProductivityDB(DATABASE_URL)
 from datetime import datetime, timedelta
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -20,10 +23,6 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-DATABASE_URL = os.getenv('DATABASE_URL')
-
-# 2. Pass the URL to the class
-db = ProductivityDB(DATABASE_URL)
 # ==================== TRANSLATIONS ====================
 
 TRANSLATIONS = {
@@ -934,6 +933,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
