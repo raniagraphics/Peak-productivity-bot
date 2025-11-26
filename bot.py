@@ -4,6 +4,8 @@ import logging
 DATABASE_URL = os.getenv('DATABASE_URL')
 # 2. Pass the URL to the class
 db = ProductivityDB(DATABASE_URL)
+class ProductivityDB:
+    def __init__(self, db_url): # <--- Must accept the URL
 from datetime import datetime, timedelta
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -933,6 +935,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
