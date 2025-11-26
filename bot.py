@@ -5,7 +5,7 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 # 2. Pass the URL to the class
 db = ProductivityDB(DATABASE_URL)
 class ProductivityDB:
-def __init__(self, db_url): # <--- Must accept the URL
+    def __init__(self, db_url): # <--- Must accept the URL
         # ... use db_url to connect ...
         # Now, use db_url to establish your connection
         # ... your connection logic here ...
@@ -932,6 +932,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
