@@ -5,7 +5,12 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 # 2. Pass the URL to the class
 db = ProductivityDB(DATABASE_URL)
 class ProductivityDB:
-    def __init__(self, db_url): # <--- Must accept the URL
+def __init__(self, db_url): # <--- Must accept the URL
+        # ... use db_url to connect ...
+        # Now, use db_url to establish your connection
+        # ... your connection logic here ...
+        self.conn = psycopg2.connect(db_url)
+        self.cursor = self.conn.cursor()           
 from datetime import datetime, timedelta
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -199,14 +204,6 @@ TRANSLATIONS = {
 }
 
 # Database class
-class ProductivityDB:
-    def __init__(self, db_url): # <--- Must accept the URL
-        # ... use db_url to connect ...
-        # Now, use db_url to establish your connection
-        # ... your connection logic here ...
-        self.users = {}
-        self.teams = {}
-    
     def get_user(self, user_id):
         if user_id not in self.users:
             self.users[user_id] = {
@@ -935,6 +932,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
