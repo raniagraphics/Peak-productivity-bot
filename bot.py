@@ -20,6 +20,10 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
+DATABASE_URL = os.getenv('DATABASE_URL')
+
+# 2. Pass the URL to the class
+db = ProductivityDB(DATABASE_URL)
 # ==================== TRANSLATIONS ====================
 
 TRANSLATIONS = {
@@ -194,12 +198,9 @@ TRANSLATIONS = {
 }
 
 # Database class
-
 class ProductivityDB:
-    # Change this line:
-    # def __init__(self):
-    # To this line:
-    def __init__(self, db_url):
+    def __init__(self, db_url): # <--- Must accept the URL
+        # ... use db_url to connect ...
         # Now, use db_url to establish your connection
         # ... your connection logic here ...
         self.users = {}
@@ -933,6 +934,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
